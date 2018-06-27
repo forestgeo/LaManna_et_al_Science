@@ -1,0 +1,373 @@
+### ForestGEO analysis of CNDD and latitudinal diversity relationships - LaManna et al. 2017, Science
+### R Code for Technical Response analyses
+### Code by: J. A. LaManna, updated: 05-24-2018
+
+
+
+##########################################################################################################
+### Section I: Code to classify individuals as saplings and adults
+# Requires dataframe 'data' with the following columns: "sp" = species code or name; "dbh" = diameter at breast height in cm
+
+# Note: This code should be run for each forest plot separately. The resulting dataframe 'data' should be renamed 'data2' and used in 
+# Section II below.
+
+data$sapling=c(0)
+dbhclass5=c()
+dbhclass2=c()
+data$sapling[which(data$dbh<10)]=1
+data$sapling=as.factor(data$sapling)
+sapclass=tapply(data$sapling,data$sp,table)
+for(i in 1:length(sapclass)) {if(sapclass[[i]][1]/sum(sapclass[[i]])<0.20) {
+	data$sapling[which(data$sp==names(sapclass[i]) & data$dbh>5)]=0
+	dbhclass5=append(dbhclass5,names(sapclass[i]))
+}}
+sapclass=tapply(data$sapling,data$sp,table)
+for(i in 1:length(sapclass)) {if(sapclass[[i]][1]/sum(sapclass[[i]])<0.20) {
+	data$sapling[which(data$sp==names(sapclass[i]) & data$dbh>2)]=0
+	dbhclass2=append(dbhclass2,names(sapclass[i]))
+}}
+dbhclass5=dbhclass5[-which(dbhclass5 %in% dbhclass2==T)]
+
+
+
+
+##########################################################################################################
+### Section II: Code to calculate distance-weighted adult abundances for each species in each quadrat
+# Requires the following R packages: doBy, reshape, vegan, spatstat
+
+# Requires dataframe 'data2' with the following columns: "sp" = species code or name; "dbh" = diameter at breast height in cm; 
+# "quadrat" = quadrat ID; "gx" = x coordinate of stem in forest plot; "gy" = y coordinate of stem in forest plot; 
+# "sapling" = sapling/adult designation from Section I (sapling = 1, adult = 0)
+
+# Note: This code should be run for each forest plot separately. The resulting dataframe 'full' from each forest plot should be combined 
+# (using rbind) across forest plots and used in Section III below.
+
+library(spatstat)
+library(vegan)
+library(reshape)
+library(doBy)
+
+## Create species by site matrices for CNDD analysis
+data2$value=c(1)
+adult.spp.forcast=summaryBy(value~quadrat+sp,FUN=sum,data=data2[which(data2$sapling==0),],na.rm=T)
+adult.spp=cast(adult.spp.forcast,quadrat~sp,value='value.sum',fun.aggregate=sum,fill=0)
+saps.spp.forcast=summaryBy(value~quadrat+sp,FUN=sum,data=data2[which(data2$sapling==1),],na.rm=T)
+saps.spp=cast(saps.spp.forcast,quadrat~sp,value='value.sum',fun.aggregate=sum,fill=0)
+
+## Restrict data to quadrats that share saplings and adults
+adult.spp.adndd=adult.spp
+goodplots=intersect(adult.spp.adndd$quadrat,saps.spp$quadrat)
+adult.spp.adndd=adult.spp.adndd[which(adult.spp.adndd$quadrat %in% goodplots==T),]
+saps.adndd=saps.spp[which(saps.spp$quadrat %in% goodplots==T),]
+adult.spp.adndd=adult.spp.adndd[order(adult.spp.adndd$quadrat),]
+saps.adndd=saps.adndd[order(saps.adndd$quadrat),]
+
+## Remove species with no individuals in common quadrats
+if(0 %in% colSums(adult.spp.adndd[,-1])==T) {adult.spp.adndd=adult.spp.adndd[,-c(which(colSums(adult.spp.adndd[,-1])==0)+1)]}
+if(0 %in% colSums(saps.adndd[,-1])==T) {saps.adndd=saps.adndd[,-c(which(colSums(saps.adndd[,-1])==0)+1)]}
+
+## Restrict data to species with both sapling and adult data
+goodspp=intersect(colnames(adult.spp.adndd),colnames(saps.adndd))
+adult.spp.adndd=adult.spp.adndd[,which(colnames(adult.spp.adndd) %in% goodspp==T)]
+saps.adndd=saps.adndd[,which(colnames(saps.adndd) %in% goodspp==T)]
+
+## Double-check that all quadrats have data
+goodplots=intersect(adult.spp.adndd$quadrat,saps.spp$quadrat)
+adult.spp.adndd=adult.spp.adndd[which(adult.spp.adndd$quadrat %in% goodplots==T),]
+saps.adndd=saps.adndd[which(saps.adndd$quadrat %in% goodplots==T),]
+adult.spp.adndd=adult.spp.adndd[order(adult.spp.adndd$quadrat),]
+saps.adndd=saps.adndd[order(saps.adndd$quadrat),]
+
+
+### Arrange dataset for CNDD analysis (1 row = number conspecific and heterospecific individuals of one species in one quadrat)
+adults.ndd=adult.spp.adndd[,-1]
+saps.ndd=saps.adndd[,-1]
+conspp.adult=adults.ndd[,1]
+for(i in 2:dim(adults.ndd)[2]) {conspp.adult=c(conspp.adult,adults.ndd[,i])}
+conspp.sap=saps.ndd[,1]
+for(i in 2:dim(saps.ndd)[2]) {conspp.sap=c(conspp.sap,saps.ndd[,i])}
+sp=rep(colnames(saps.ndd)[1],times=dim(saps.ndd)[1])
+for(i in 2:dim(saps.ndd)[2]) {sp=c(sp,rep(colnames(saps.ndd)[i],times=dim(saps.ndd)[1]))}
+quadrat=as.character(adults.ndd$quadrat)
+for(i in 2:dim(adults.ndd)[2]) {quadrat=c(quadrat,as.character(adults.ndd$quadrat))}
+heterospp.adult=rowSums(adults.ndd)-adults.ndd[,1]
+for(i in 2:dim(adults.ndd)[2]) {heterospp.adult=c(heterospp.adult,rowSums(adults.ndd)-adults.ndd[,i])}
+heterospp.sap=rowSums(saps.ndd)-saps.ndd[,1]
+for(i in 2:dim(saps.ndd)[2]) {heterospp.sap=c(heterospp.sap,rowSums(saps.ndd)-saps.ndd[,i])}
+full=data.frame(conspp.adult,conspp.sap,heterospp.adult,heterospp.sap)
+full$quadrat=quadrat
+full$sp=sp
+
+
+### Calculate distance-weighted adult abundance for each species in each quadrat
+
+goodspp = unique(full$sp)
+data3 = data2[which(data2$sp %in% goodspp == T),]
+data3$sp = as.character(data3$sp)
+splist = split(data3, data3$sp)
+length(splist)
+
+seed = function(r, alpha=100) {(1/(pi*alpha*((1+((r^2)/alpha))^2)))}	# Clark's 2Dt p = 1 
+
+# Plot seed dispersal kernel
+alpha = exp(6)
+r = seq(0.1,140,by=0.1)
+q = seed(r, alpha = alpha)
+qmax = max(q)
+q2 = q * (1/seed(0.1, alpha = alpha))
+plot(r, q2, type = "n",yaxs='i',xaxs='i',las=1, xlab = "Distance from center of focal quadrat", ylab = "Weight")
+abline(v=10, lty=2)
+abline(v=20, lty=2)
+lines(r, q2, col = "red")
+box()
+
+# Calculate mean location of each quadrat
+quads.gx = tapply(data$gx, data$quadrat, mean)
+quads.gy = tapply(data$gy, data$quadrat, mean)
+quads.mat.gx = data.frame(quadrat = names(quads.gx), qx = round(quads.gx,0))
+quads.mat.gy = data.frame(quadrat = names(quads.gy), qy = round(quads.gy,0))
+quads.mat = merge(quads.mat.gx, quads.mat.gy, by = "quadrat", all.x = T)
+
+# Function to calculate distance-weighted adult abundance (using Clark's 2dT dispersal kernel with alpha = exp(6))
+dist.weighted.abund.function = function(test) {
+adultlocs = test[which(test$sapling == 0),c("gx","gy")]
+xdist = crossdist(adultlocs[,1], adultlocs[,2], quads.mat[,2], quads.mat[,3])
+xdist.weighted.alphae6 = seed(xdist, alpha = exp(6)) * (1/seed(0.1, alpha = exp(6)))
+adults.dist.weighted = data.frame(quadrat = quads.mat[,1], sp = test$sp[1], adult6 = apply(xdist.weighted.alphae6, 2, sum))
+return(adults.dist.weighted)
+}
+
+adults.dist.weighted = lapply(splist, dist.weighted.abund.function)
+adults.dist.weighted = data.frame(do.call('rbind', adults.dist.weighted))
+adults.dist.weighted$quadrat = as.character(adults.dist.weighted$quadrat)
+names(adults.dist.weighted) = c("quadrat", "sp", "adult.dist.wght.alphae6")
+adults.dist.weighted$plot = c("ForestPlotName")
+
+full2 = merge(full, adults.dist.weighted, by = c("sp", "quadrat"), all.x = T)
+full = full2
+
+save(full, file = "ForestPlotName_full_data.RData")
+
+
+
+
+##########################################################################################################
+### Section III: Code to estimate CNDD and HNDD for all species across forest plots
+# Requires the following R packages: doBy, gnm
+
+# Requires dataframe 'data', which is a rbind of all dataframes 'full' from each forest plot 
+# Dataframe 'data' should contain the following columns: "plot" = forest plot code or name; "quadrat" = quadrat ID within each forest plot;
+# "sp" = species code or name; "conspp.adult" = number of conspecific adults of a given species in a given quadrat; 
+# "conspp.sap" = number of conspecific saplings of a given species in a given quadrat; 
+# "heterospp.adult" = number of heterospecific adults for a given species in a given quadrat; 
+# "heterospp.sap" = number of heterospecific saplings for a given species in a given quadrat; 
+
+library(doBy)
+library(gnm)
+
+
+###################################
+### Load functions for analyses
+
+Ricker <- function(x,Had,Hsap){
+	list(predictors =	list(r = 1, CNDD = 1, HNDDad = 1, HNDDsap = 1),
+	variables = list(substitute(x), substitute(Had), substitute(Hsap)),
+      term = function(predictors, variables) {
+          pred <- paste("(", variables[1],")*exp(", predictors[1], 
+				")*exp(", predictors[2], "*", variables[1], 
+				")*exp(", predictors[3], "*", variables[2],
+				")*exp(", predictors[4], "*", variables[3],")+0.0001", sep = "")
+         })
+}
+class(Ricker ) <- "nonlin"
+
+# fit model with nonlinear Ricker function (distance-weighted approach)
+fit.ricker.cndd = function(data){
+x=data$adult; y = data$sap; Hsap = data$Hsap; Had = data$Had
+return(tryCatch(gnm(y~-1+Ricker(x,Had,Hsap),family = quasipoisson(link="identity")), error=function(e) NULL))
+}
+
+# fit model with nonlinear Ricker function (original offset approach)
+fit.ricker.cndd.offset = function(data, offset = 0.1){
+x=data$adult; y = data$sap; Hsap = data$Hsap; Had = data$Had
+x[which(x == 0 & y > 0)] = x[which(x == 0 & y > 0)] + offset	# Add offset only to quads with saplings but zero adults so they are not excluded
+return(tryCatch(gnm(y~-1+Ricker(x,Had,Hsap),family = quasipoisson(link="identity")), error=function(e) NULL))
+}
+
+# fit model with nonlinear Ricker function (applying offset to all quadrats)
+fit.ricker.cndd.offset.all = function(data, offset = 0.1){
+x=data$adult; y = data$sap; Hsap = data$Hsap; Had = data$Had
+x = x + offset							# Add offset to all quads so quads with saplings but zero adults are not excluded
+return(tryCatch(gnm(y~-1+Ricker(x,Had,Hsap),family = quasipoisson(link="identity")), error=function(e) NULL))
+}
+
+CNDD.across.spp=function(test) {
+model=lm(CNDD~log(ba),weights=(1/(CNDD.se)),data=test)
+int=summary(model)$coef[1,1]
+int.se=summary(model)$coef[1,2]
+beta=summary(model)$coef[2,1]
+beta.se=summary(model)$coef[2,2]
+ests=c(int,int.se,beta,beta.se)
+names(ests)=c("int","int.se","beta","beta.se")
+return(ests)
+}
+
+
+###################################
+### Prepare data for analyses
+
+data.summary = summaryBy(as.numeric(conspp.adult > 0) + as.numeric(conspp.sap > 0) ~ sp, FUN = sum, data = data)
+names(data.summary)[c(2:3)]=c("adultquads", "sapquads")
+data1 = merge(data, data.summary, by = "sp", all.x = T)
+data1 = data1[order(data1$plot, data1$sp),]
+data.backup = data1
+
+
+###################################
+### Ricker CNDD Analysis
+
+data1 = data.backup
+
+### Remove species with saplings or adults occupying fewer than 9 quadrats
+testq = data1[which(data1$adultquads>9),]
+testq = testq[which(testq$sapquads>9),]
+
+#### Loop through plots and species 
+testq = testq[order(testq$plot, testq$sp),]
+est.list = list()
+studyplots = unique(testq$plot)
+residlist = list()
+length(unique(testq$sp))
+
+for(i in 1:length(studyplots)) {
+testq2 = testq[which(testq$plot == studyplots[i]),]
+sap = testq2$conspp.sap
+Had = testq2$heterospp.adult
+Hsap = testq2$heterospp.sap
+
+# ***IMPORTANT*** Only run one of the two lines below either for the distance-weighted adult abundances (LaManna et al. Science 2018)
+# 		  or the quadrat-based adult abundances (original method) 
+adult = testq2$adult.dist.wght.alphae6		### Distance-weighted conspecific adult abundances
+# adult = testq2$conspp.adult			### Conspecific adult abundances in each quadrat
+
+spp = as.numeric(as.factor(testq2$sp))
+n.groups = length(unique(spp))
+n = length(sap)
+spnames = data.frame(levels(as.factor(testq2$sp)),c(1:length(unique(testq2$sp))))
+names(spnames) = c("sp","code")
+data = data.frame("adult" = adult, "sap" = sap, "Had" = Had, "Hsap" = Hsap, "spp" = spp)
+qlist = split(data, spp)
+
+# ***IMPORTANT*** Only run one of the three lines below either for the distance-weighted adult abundance approach (LaManna et al. Science 2018), 
+#		  the original offset approach (LaManna et al. 2017), or the offset applied to all quadrats approach (LaManna et al. 2018)
+fits3 = lapply(qlist, fit.ricker.cndd)					### Distance-weighted conspecific adult abundance approach
+# fits3 = lapply(qlist, fit.ricker.cndd.offset, offset = 0.1)		### Original offset approach (Add offset only to quads with saplings but zero adults so they are not excluded)
+# fits3 = lapply(qlist, fit.ricker.cndd.offset.all, offset = 0.1)	### Offset applied to all quadrats so quads with saplings but zero adults are not excluded
+
+
+fits2 = list()
+splist = c()
+predresidcor = c()
+adultresidcor = c()
+residframe = data.frame(matrix(NA,nrow=dim(qlist[[1]])[1],ncol=length(unique(data$spp))))
+r2 = c()
+for(j in 1:length(fits3)) {
+  possibleError <- tryCatch(summary(fits3[[j]])$coef, error=function(e) e  )
+  if(!inherits(possibleError, "error")){best.pow.optim=c(t(summary(fits3[[j]])$coef[,1:2]))
+names(best.pow.optim) = paste(rep(rownames(summary(fits3[[j]])$coef[,1:2]), each=2), rep(c("",".se"), times=3), sep="")
+splist = append(splist, as.character(spnames$sp[j]))
+predresidcor = append(predresidcor, cor.test(resid(fits3[[j]]), predict(fits3[[j]]))$estimate)
+adultresidcor = append(adultresidcor, cor.test(resid(fits3[[j]]), fits3[[j]]$data$x)$estimate)
+model = glm(fits3[[j]]$data$y ~ predict(fits3[[j]]), family = quasipoisson)
+r2test = (summary(model)$null.deviance - summary(model)$deviance) / summary(model)$null.deviance
+r2 = append(r2,r2test)
+residframe[,j] = resid(fits3[[j]])
+names(residframe)[j] = as.character(spnames$sp[j])
+fits2[[j]] = best.pow.optim
+}}
+
+residframe$plot = c(studyplots[i])
+residlist[[i]] = residframe
+fits = data.frame(do.call("rbind", fits2))
+fits$plot = c(studyplots[i])
+fits$sp = splist
+fits$r2 = r2
+fits$predresidcor = predresidcor
+fits$adultresidcor = adultresidcor
+fits4 = merge(fits, spp.data, by = "sp", all.x = T)
+est.list[[i]] = fits4
+}
+
+
+###################################
+### Examine CNDD estimates
+
+est.list.backup=est.list
+
+est.list=est.list.backup
+
+# Function to remove poorly estimated speces
+fReliableEsts=function(test) {
+test2=test[!is.na(test$CNDD.se),]
+test2=test2[which(test2$CNDD.se<100),]
+return(test2)}
+est.list=lapply(est.list,fReliableEsts)
+est.list.test=data.frame(do.call("rbind", est.list))
+dim(est.list.test)
+
+
+# Calculate weighted mean and median estimates for each forest plot
+fmedianCNDD=function(test) {
+return(median(test$CNDD))}
+fmedianHNDDad=function(test) {
+return(median(test$HNDDad))}
+fmedianHNDDsap=function(test) {
+return(median(test$HNDDsap))}
+fmedianR=function(test) {
+return(median(test$r))}
+fweighted.mean.R=function(test) {
+return(summary(lm(test$r~1,weights=(1/(test$r.se))))$coef[1])}
+fweighted.mean=function(test) {
+return(summary(lm(test$CNDD~1,weights=(1/(test$CNDD.se))))$coef[1])}
+fweighted.mean.HNDDad=function(test) {
+return(summary(lm(test$HNDDad~1,weights=(1/(test$HNDDad.se))))$coef[1])}
+fweighted.mean.HNDDsap=function(test) {
+return(summary(lm(test$HNDDsap~1,weights=(1/(test$HNDDsap.se))))$coef[1])}
+
+medianR=unlist(lapply(est.list,fmedianR))
+medianCNDD=unlist(lapply(est.list,fmedianCNDD))
+medianHNDDad=unlist(lapply(est.list,fmedianHNDDad))
+medianHNDDsap=unlist(lapply(est.list,fmedianHNDDsap))
+meanR=unlist(lapply(est.list,fweighted.mean.R))
+meanCNDD=unlist(lapply(est.list,fweighted.mean))
+meanHNDDad=unlist(lapply(est.list,fweighted.mean.HNDDad))
+meanHNDDsap=unlist(lapply(est.list,fweighted.mean.HNDDsap))
+
+
+
+### Plot species rarefied richness against strength of CNDD across forest plots
+# Requires dataframe 'plot.data' containing the following columns: "plot" = forest plot name or code; 
+# "plotrarefy" = rarefied species richness for each forest plot with forest plots
+# listed alphabetically (or in same order as in dataframe 'data' for Section III above); "lat" = latitude of each forest plot
+plot(medianCNDD,plot.data$plotrarefy)
+cor.test(medianCNDD,plot.data$plotrarefy,method="spearman")
+
+
+### Calculation of relationship between CNDD and species abundance for each forest plot
+sppcnddlist=lapply(est.list, CNDD.across.spp)
+sppcnddlist=data.frame(do.call("rbind", sppcnddlist))
+plot(abs(plot.data$lat), sppcnddlist$beta)
+cor.test(abs(plot.data$lat), sppcnddlist$beta, method = "spearman")
+
+
+
+
+
+
+
+
+
+
+
+
+

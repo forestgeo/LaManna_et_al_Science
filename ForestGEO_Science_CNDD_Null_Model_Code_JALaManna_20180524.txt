@@ -1,0 +1,334 @@
+### ForestGEO analysis of CNDD and latitudinal diversity relationships - LaManna et al. 2017, Science
+### R Code for Technical Response analyses
+### Code by: J. A. LaManna, updated: 05-24-2018
+
+
+
+##########################################################################################################
+### Null Model fixing adult locations and distributing saplings with cluster
+### 2Dt process (as recommended by Wiegand & Moloney 2004 Oikos, p. 227)
+
+# Requires the following R packages: doBy, reshape, vegan, spatstat, gnm
+
+# Requires dataframe 'data2' with the following columns: "sp" = species code or name; "dbh" = diameter at breast height in cm; 
+# "quadrat" = quadrat ID; "gx" = x coordinate of stem in forest plot; "gy" = y coordinate of stem in forest plot; 
+# "max.height" = a species' maximum height (should be the same value for each species); 
+# "sapling" = sapling/adult designation from Section I (sapling = 1, adult = 0)
+
+# Requires dataframe 'est.list.test' that is output from the CNDD analysis (see analysis code in 'ForestGEO_Science_CNDD_Analysis_RCode_JALaManna_20180524.txt')
+
+# Note: This code should be run for each forest plot separately. 
+
+library(spatstat)
+library(vegan)
+library(reshape)
+library(doBy)
+library(gnm)
+
+
+summary(data2$gx);summary(data2$gy)
+plot(data2$gx, data2$gy)
+
+plotwidth =  1000		# Replace with forest plot width	
+plotheight = 500		# Replace with forest plot height
+
+forestplot.20x20.dist.weight = est.list.test[which(est.list.test$plot == "forestplot"),]
+goodspp = unique(forestplot.20x20.dist.weight$sp)
+data3 = data2[which(data2$sp %in% goodspp == T),]
+data3$sp = as.character(data3$sp)
+splist = split(data3, data3$sp)
+
+
+# Clark's 2Dt seed dispersal kernel
+dispersal.fun = function(x, y, alpha, n) {
+seedp = function(r, alpha=100) {(1/(pi*alpha*((1+((r^2)/alpha))^2)))*2*pi*r}	# Clark's 2Dt p = 1 (integrated in 2 polar dimensions)
+disp.dists = seq(0, 10000, by = 1)
+rho <- sample(disp.dists, size = n, replace = TRUE, prob = seedp(r = disp.dists, alpha = alpha))
+theta <- runif(n, 0, 2*pi)
+x1 <- (rho * cos(theta)) + x
+y1 <- (rho * sin(theta)) + y
+result = data.frame(x1, y1)
+return(result)
+}
+
+
+dispersal.fun2 = function(loc, xlim = plotwidth, ylim = plotheight, alpha = 100) {	# Recruits disperse across plot edges in a torus
+test = dispersal.fun(loc[1], loc[2], alpha = alpha, n = 1)
+test[,1] = test[,1] %% xlim		# Torus
+test[,2] = test[,2] %% ylim
+return(data.frame(x1 = test[,1], y1 = test[,2]))
+}
+
+
+### Example of dispersal range
+x <- 10
+y <- 10
+n <- 1000
+alpha <- exp(5.8)
+test <- dispersal.fun(x, y, alpha, n)
+x1 <- test[,1]
+y1 <- test[,2]
+
+distplot = 1000
+plot(x1, y1, pch=19, cex=0.6, col="#00000020", asp = 1, xlim = c(x-distplot, x+distplot), ylim = c(y-distplot,y+distplot))
+points(x, y, col = "red", cex = 1, pch = 19)
+abline(v = seq(-1000, 1000, by = 20))
+abline(h = seq(-1000, 1000, by = 20))
+
+plot(x1, y1, pch=19, cex=0.6, col="#00000020", asp = 1)
+points(x, y, col = "red", cex = 1, pch = 19)
+abline(v = seq(-1000, 1000, by = 20))
+abline(h = seq(-1000, 1000, by = 20))
+
+
+test = dist(rbind(data.frame(x, y),data.frame("x" = x1, "y" = y1)))
+test1 = as.matrix(test)[1,]
+hist(test1,breaks=300)
+
+seed = function(r, alpha=100) {1/(pi*alpha*((1+((r^2)/alpha))^2))}	# Clark's 2Dt p = 1
+seedp = function(r, alpha=100) {(1/(pi*alpha*((1+((r^2)/alpha))^2)))*2*pi*r}	# Clark's 2Dt p = 1, integrated over the circumfrence
+disp.dists = seq(0, 10000, by = 1)
+lines(disp.dists, seed(r = disp.dists, alpha = alpha) * n * (1/sum(seed(r = disp.dists, alpha = alpha))))
+lines(disp.dists, seedp(r = disp.dists, alpha = alpha) * n * 3*(2/sum(seedp(r = disp.dists, alpha = alpha))))
+
+plot(as.numeric(names(table(test1))),as.numeric(table(test1)/(2*pi*as.numeric(names(table(test1))))))
+lines(disp.dists, seed(r = disp.dists, alpha = alpha) * n, col="red")
+
+
+
+### Example of dispersal range at plot corner
+x <- 10
+y <- 10
+n <- 1000
+test1 = dispersal.fun2(c(x, y), alpha = alpha)
+for(i in 1:(n-1)) {
+test1 = rbind(test1, dispersal.fun2(c(x, y), xlim = plotwidth, ylim = plotheight, alpha = alpha))
+}
+plot(test1$x1, test1$y1, pch=19, cex=0.6, col=rgb(0,0,0,alpha=(25/199)), asp = 1)
+points(runif(n, 0, plotwidth), runif(n, 0, plotheight), pch=19, cex=0.6, col=rgb(0,0,1,alpha=(25/199)))
+points(x, y, col = "red", cex = 1, pch = 19)
+abline(h = 0, lty = 2)
+abline(v = 0, lty = 2)
+abline(h = plotheight, lty = 2)
+abline(v = plotwidth, lty = 2)
+
+
+# Thomson et al 2011 J. of Ecol. Relationship between max tree height and mean dispersal distance (plus observed error around regression fit)
+mean.disp.dist = function(max.height) {10 ^ ((0.1975 + (0.936 * log10(max.height))) + rnorm(length(max.height), mean = 0, sd = 0.245))}		# Relationship between maximum tree height and mean dispersal distance from Thomson et al 2011 J. of Ecol.
+clark.alpha = function(mean.disp, shape = 1) {exp(log(mean.disp) - (0.5*log(pi) + log(gamma(shape - 1/2)) - log(2) - log(gamma(shape))))^2}	# Calculate alpha from Clark's 2Dt model given mean dispersal distance
+
+
+null.assembly = function(test, alpha = 100) {
+
+# *** IMPORTANT*** Run the following one line of code ONLY if using constant dispersal kernel (30 m)
+alpha = clark.alpha(30)							# 30 m mean dispersal
+
+# *** IMPORTANT*** Run the following two lines of code ONLY if using allometrically scaled dispersal kernel (based on a species' maximum height, see Chave 2005 Oecologia for allometric equations relating DBH to height)
+# mean.disp.distance = mean.disp.dist(test$max.height[1])		# For Thomson et al 2011 tree height-dispersal relationship
+# alpha = clark.alpha(mean.disp.distance)				# For Thomson et al 2011 tree height-dispersal relationship 
+
+adults = test[which(test$sapling == 0),]
+saps = test[which(test$sapling == 1),]
+sgx <- adults$gx					# Use to fix adult locs		
+sgy <- adults$gy					# Use to fix adult locs	
+adultlocs <- data.frame(x1 = sgx, y1 = sgy, quadrat = adults$quadrat)
+adultlocs$sapling = 0
+repro.adults <- sample(1:nrow(adults), size = nrow(saps), replace = T)
+saplocs = apply(data.frame(sgx, sgy)[repro.adults,], 1, dispersal.fun2, xlim = plotwidth, ylim = plotheight, alpha = alpha)
+saplocs = data.frame(do.call("rbind", saplocs))
+saplocs$sapling = 1
+saplocs$quadrat = c(999999)
+simlocs = rbind(adultlocs, saplocs)
+simlocs$sp = test$sp[1]
+return(simlocs)
+}
+
+
+wdvec = c(1:(plotwidth/20))
+htvec = c(1:(plotheight/20))
+grid = expand.grid(wdvec = wdvec, htvec = htvec)
+grid$wdvec = sprintf("%03d", grid$wdvec)
+grid$htvec = sprintf("%03d", grid$htvec)
+totquad = data.frame(quad = paste(grid$wdvec, grid$htvec, sep = ""))
+
+
+quads.gx = tapply(data$gx, data$quadrat, mean)
+quads.gy = tapply(data$gy, data$quadrat, mean)
+quads.mat.gx = data.frame(quadrat = names(quads.gx), qx = round(quads.gx,0))
+quads.mat.gy = data.frame(quadrat = names(quads.gy), qy = round(quads.gy,0))
+quads.mat = merge(quads.mat.gx, quads.mat.gy, by = "quadrat", all.x = T)
+wdvecm = as.numeric(cut(quads.mat$qx, breaks = seq(0, plotwidth, by = 20)))
+htvecm = as.numeric(cut(quads.mat$qy, breaks = seq(0, plotheight, by = 20)))
+wdvecm = sprintf("%03d",wdvecm)
+htvecm = sprintf("%03d",htvecm)
+quads.mat$quad = paste(wdvecm, htvecm, sep = "")
+load("forestplot_dist_weighted_adults_qc.RData")
+adults.dist.weighted2 = data.frame(quadrat = adults.dist.weighted$quadrat, sp = adults.dist.weighted$sp, adult.dist = adults.dist.weighted$adult.dist.wght.alphae6)
+adults.dist.weighted3 = merge(adults.dist.weighted2, quads.mat, by = "quadrat")
+adults.dist.weighted3 = adults.dist.weighted3[,c("quad", "sp", "adult.dist")]
+
+
+
+### Load functions for analyses
+Ricker <- function(x,Had,Hsap){
+	list(predictors =	list(r = 1, CNDD = 1),
+	variables = list(substitute(x)),
+      term = function(predictors, variables) {
+          pred <- paste("(", variables[1],")*exp(", predictors[1], 
+				")*exp(", predictors[2], "*", variables[1],")+0.0001", sep = "")
+         })
+}
+class(Ricker ) <- "nonlin"
+
+# fit model and plot fit line with nonlinear Ricker function
+fit.ricker.cndd = function(data){
+x = data$adult; y = data$saps
+return(tryCatch(gnm(y~-1+Ricker(x),family = quasipoisson(link="identity")), error=function(e) NULL))
+}
+
+
+quad.ID.cast <- function(simlocs, height = plotheight, width = plotwidth, by.meters = 20, sp = "XXXX") {
+wdvec = as.numeric(cut(simlocs$x1, breaks = seq(0, width, by = by.meters)))
+htvec = as.numeric(cut(simlocs$y1, breaks = seq(0, height, by = by.meters)))
+wdvec = sprintf("%03d",wdvec)
+htvec = sprintf("%03d",htvec)
+simlocs$quad = paste(wdvec, htvec, sep = "")
+simlocs$value = c(1)
+adultcast = summaryBy(value ~ quad, keep.names = T, FUN = sum, data = simlocs[which(simlocs$sapling == 0),])
+names(adultcast)[2] = "adults"
+sapcast = summaryBy(value ~ quad, keep.names = T, FUN = sum, data = simlocs[which(simlocs$sapling == 1),])
+names(sapcast)[2] = "saps"
+simcast = merge(adultcast, sapcast, by = "quad", all = T)
+simcast = merge(simcast, totquad, by = "quad", all = T)
+simcast[is.na(simcast)] <- 0
+adults.dist.weighted.sp = adults.dist.weighted3[which(adults.dist.weighted3$sp == sp),c("quad", "adult.dist")]
+simcast2 = merge(simcast, adults.dist.weighted.sp, by = "quad")
+simcast = data.frame(quad = simcast2$quad, adults = simcast2$adult.dist, saps = simcast2$saps)
+return(simcast)
+}
+
+
+fits.summary = function(Rickerfits, sp = "XXXX") {
+fits2 = list()
+for(j in 1:length(Rickerfits)) {
+  possibleError <- tryCatch(summary(Rickerfits[[j]])$coef, error=function(e) e  )
+  if(!inherits(possibleError, "error")) {best.pow.optim = c(t(coef(summary(Rickerfits[[j]]))[,1:2]))
+names(best.pow.optim) = paste(rep(rownames(coef(summary(Rickerfits[[j]]))[,1:2]), each = 2), rep(c("", ".se"), times = 1), sep = "")
+fits2[[j]] = best.pow.optim
+}}
+fits = data.frame(do.call("rbind", fits2))
+fits$sp = sp
+return(fits)
+}
+
+
+null.model = function(test, k = 2000) {
+null.assemblies.list = replicate(k, null.assembly(test), simplify = F)
+null.assemblies.quad.20x20 = lapply(null.assemblies.list, quad.ID.cast, by = 20, sp = test$sp[1])
+Rickerfits.20x20.dist.weight = lapply(null.assemblies.quad.20x20, fit.ricker.cndd)
+mod.list = list(Rickerfits.20x20.dist.weight)
+mod.list.results = lapply(mod.list, fits.summary, sp = test$sp[1])
+names(mod.list.results) = c("Rickerfits.20x20.dist.weight")
+return(mod.list.results)
+}
+
+
+#################################
+### Run analysis and save results
+set.seed(5064)
+Ricker.cluster.null.models = lapply(splist, null.model, k = 100)
+save(Ricker.cluster.null.models, file = "forestplot_Ricker_2Dt_Wiegand_null_model_30m_dispersal_dists_100NullReps_Adults_fixed_AdultDistWght_alphae6.RData")
+
+
+
+#################################
+### Summarize analysis
+
+Rickersims.20x20.dist.weight = list()
+for(j in 1:length(Ricker.cluster.null.models)) {
+Rickersims.20x20.dist.weight[[j]] = Ricker.cluster.null.models[[j]][[1]]}
+Rickersims.20x20.dist.weight = data.frame(do.call('rbind', Rickersims.20x20.dist.weight))
+
+
+# Merge 20x20 offset = 0.1 sims with observed results
+forestplot.20x20.dist.weight = est.list.test[which(est.list.test$plot == "forestplot"),]
+forestplot.20x20.dist.weight = forestplot.20x20.dist.weight[,c("sp", "CNDD", "CNDD.se", "ba")]
+names(Rickersims.20x20.dist.weight)[1:4] = c("r.sim", "r.se.sim", "CNDD.sim", "CNDD.se.sim")
+Rickersims.20x20.dist.weight = merge(forestplot.20x20.dist.weight, Rickersims.20x20.dist.weight, by = "sp", all.x = T)
+
+
+# turn these into list
+Rickersims = list(Rickersims.20x20.dist.weight)
+Model.estimates = list(forestplot.20x20.dist.weight)
+
+
+obs.medianCNDD = c()
+medianCNDD.es = c() 
+medianCNDD.ses = c()
+obs.rare.medianCNDD = c()
+rare.medianCNDD.es = c()
+rare.medianCNDD.ses = c()
+obs.cnddspp.slope = c()
+CNDDSPP.es = c()
+CNDDSPP.ses = c()
+
+
+for(j in 1:length(Rickersims)) {
+its = as.numeric(table(Rickersims[[j]]$sp))
+its2 = c()
+for(i in 1:length(its)) {
+its2 = append(its2, 1:its[i])
+}
+Rickersims[[j]]$it = its2
+Rickersims[[j]] = Rickersims[[j]][!is.na(Rickersims[[j]]$CNDD.se.sim),]
+if(max(Rickersims[[j]]$CNDD.se.sim) > 100) {Rickersims[[j]] = Rickersims[[j]][-which(Rickersims[[j]]$CNDD.se.sim > 100),]}
+test.its = split(Rickersims[[j]], Rickersims[[j]]$it)
+test.sp = split(Rickersims[[j]], Rickersims[[j]]$sp)
+
+# Median CNDD
+medianCNDD.sim = unlist(lapply(test.its, function(x) {median(x$CNDD.sim)}))
+obs.medianCNDD[j] = median(Model.estimates[[j]]$CNDD)
+medianCNDD.es[j] = (obs.medianCNDD[j] - mean(medianCNDD.sim)) 
+medianCNDD.ses[j] = (obs.medianCNDD[j] - mean(medianCNDD.sim)) / sd(medianCNDD.sim) 
+
+# Rare species median CNDD
+rarecutoff = 0.1
+rare.medianCNDD.sim = unlist(lapply(test.its, function(x) {median(x$CNDD.sim[which(x$ba <= rarecutoff)])}))
+rare.medianCNDD.sim.mean = mean(rare.medianCNDD.sim)
+rare.medianCNDD.sim.sd = sd(rare.medianCNDD.sim)
+obs.rare.medianCNDD[j] = median(Model.estimates[[j]]$CNDD[which(Model.estimates[[j]]$ba <= rarecutoff)])
+rare.medianCNDD.es[j] = (obs.rare.medianCNDD[j] - rare.medianCNDD.sim.mean) 
+rare.medianCNDD.ses[j] = (obs.rare.medianCNDD[j] - rare.medianCNDD.sim.mean) / rare.medianCNDD.sim.sd 
+
+# CNDDSPP
+CNDD.sp.abund.null.function = function(test) {
+model = lm(CNDD.sim ~ log(ba), weights = (1/CNDD.se.sim), data = test)
+int=summary(model)$coef[1,1]
+int.se=summary(model)$coef[1,2]
+beta=summary(model)$coef[2,1]
+beta.se=summary(model)$coef[2,2]
+ests=c(int,int.se,beta,beta.se)
+names(ests)=c("int","int.se","beta","beta.se")
+return(ests)}
+CNDD.sim.sppcndd = lapply(test.its, CNDD.sp.abund.null.function)
+CNDD.sim.sppcndd = data.frame(do.call("rbind", CNDD.sim.sppcndd))
+CNDD.sim.sppcndd.mean = apply(CNDD.sim.sppcndd, 2, mean)
+CNDD.sim.sppcndd.sd = apply(CNDD.sim.sppcndd, 2, sd)
+obs.cnddspp = lm(CNDD ~ log(ba), weights = (1/CNDD.se), data = Model.estimates[[j]])
+obs.cnddspp.slope[j] = summary(obs.cnddspp)$coef[2,1]
+CNDDSPP.es[j] = (obs.cnddspp.slope[j] - CNDD.sim.sppcndd.mean[3]) 
+CNDDSPP.ses[j] = (obs.cnddspp.slope[j] - CNDD.sim.sppcndd.mean[3]) / CNDD.sim.sppcndd.sd[3]
+}
+
+
+# Create summary object
+forestplot.wiegand.summary = data.frame(obs.medianCNDD, medianCNDD.es, medianCNDD.ses, 
+	obs.cnddspp.slope, CNDDSPP.es, CNDDSPP.ses, obs.rare.medianCNDD, rare.medianCNDD.es, rare.medianCNDD.ses)
+forestplot.wiegand.summary$plot = "forestplot"
+
+# Save summary object
+save(forestplot.wiegand.summary, Ricker.cluster.null.models, Rickersims, file = "forestplot_2Dt_Wiegand_null_model_Adults_Dist-weighted_Results.RData")
+
+
+
+
