@@ -56,3 +56,9 @@ Hide authors and affiliations
 
 Science  30 Jun 2017: Vol. 356, Issue 6345, pp. 1389-1392  
 DOI: 10.1126/science.aam5678
+
+---
+
+* Response #1: LaManna et al. 2018. Response to Comment on "Plant diversity increases with the strength of negative density dependence at the global scale" Science Vol. 360, Issue 6391, eaar3824. DOI: 10.1126/science.aar3824
+
+* Response #2: LaManna et al. 2018. Response to Comment on "Plant diversity increases with the strength of negative density dependence at the global scale". Science Vol. 360, Issue 6391, eaar5245. DOI: 10.1126/science.aar5245
